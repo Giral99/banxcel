@@ -1,65 +1,167 @@
-// Sélection des éléments
+// ===== Sélecteurs
 const pdfFileInput = document.getElementById('pdfFile');
 const exportBtn = document.getElementById('exportExcel');
 const previewDiv = document.getElementById('preview');
+const tolInput = document.getElementById('tol');
 
-let extractedRows = []; // stockera les lignes extraites
+let tableRows = []; // sera un tableau 2D (rows x cols)
 
-// 1. Lecture du PDF dès qu’un fichier est choisi
-pdfFileInput.addEventListener('change', async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
+// Utilitaire : regroupe des objets (x,y,text) par ligne en utilisant une tolérance sur y
+function groupByRows(items, yTol = 3) {
+  // On trie par y décroissant (dans pdf.js, l'origine peut varier selon les PDFs)
+  items.sort((a, b) => b.y - a.y);
 
-  previewDiv.innerHTML = "<p>Lecture du PDF en cours...</p>";
-  extractedRows = [];
+  const rows = [];
+  let current = [];
 
-  const fileReader = new FileReader();
-  fileReader.onload = async function() {
-    const typedarray = new Uint8Array(this.result);
-
-    // Utilisation de pdf.js pour lire le PDF
-    const pdf = await pdfjsLib.getDocument(typedarray).promise;
-
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-
-      // Concatène tout le texte de la page
-      let pageText = textContent.items.map(i => i.str).join(' ');
-      
-      // Découpe grossièrement par lignes (selon ton PDF tu ajusteras)
-      let lines = pageText.split(/[\r\n]+/);
-
-      lines.forEach(line => {
-        if (line.trim().length > 5) { // ignore lignes trop courtes
-          extractedRows.push([line.trim()]);
-        }
-      });
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (current.length === 0) {
+      current.push(it);
+      continue;
     }
-
-    if (extractedRows.length > 0) {
-      previewDiv.innerHTML = "<h3>Prévisualisation</h3>";
-      let table = "<table border='1'><tr><th>Lignes extraites</th></tr>";
-      extractedRows.slice(0,10).forEach(row => {
-        table += `<tr><td>${row}</td></tr>`;
-      });
-      table += "</table>";
-      previewDiv.innerHTML += table;
-      exportBtn.disabled = false;
+    const yRef = current[0].y;
+    if (Math.abs(it.y - yRef) <= yTol) {
+      current.push(it);
     } else {
-      previewDiv.innerHTML = "<p>Aucune donnée extraite</p>";
-      exportBtn.disabled = true;
+      // nouvelle ligne
+      rows.push(current);
+      current = [it];
     }
-  };
+  }
+  if (current.length) rows.push(current);
 
-  fileReader.readAsArrayBuffer(file);
-});
+  // Trie chaque ligne par x croissant
+  rows.forEach(line => line.sort((a, b) => a.x - b.x));
+  return rows;
+}
 
-// 2. Export Excel avec SheetJS
-exportBtn.addEventListener('click', () => {
-  const ws = XLSX.utils.aoa_to_sheet(extractedRows);
+// Utilitaire : à partir de la première ligne (entêtes), crée les "centres de colonnes"
+function inferColumnCentersFromHeader(headerLine) {
+  // On prend le x de chaque fragment comme un centre initial
+  const centers = headerLine.map(cell => cell.x);
+
+  // On "nettoie" : si des x sont très proches (< 15 px), on les fusionne (moyenne)
+  const merged = [];
+  const threshold = 15; // px
+  centers.sort((a, b) => a - b);
+
+  let bucket = [centers[0]];
+  for (let i = 1; i < centers.length; i++) {
+    const prev = bucket[bucket.length - 1];
+    const cur = centers[i];
+    if (Math.abs(cur - prev) <= threshold) {
+      bucket.push(cur);
+    } else {
+      // push moyenne du bucket
+      merged.push(Math.round(bucket.reduce((s, v) => s + v, 0) / bucket.length));
+      bucket = [cur];
+    }
+  }
+  if (bucket.length) merged.push(Math.round(bucket.reduce((s, v) => s + v, 0) / bucket.length));
+
+  return merged;
+}
+
+// Place chaque fragment sur la colonne dont le centre est le plus proche
+function mapLineToColumns(lineItems, centers) {
+  const cols = new Array(centers.length).fill('');
+  lineItems.forEach(({ x, text }) => {
+    let bestIdx = 0;
+    let bestDist = Math.abs(x - centers[0]);
+    for (let i = 1; i < centers.length; i++) {
+      const d = Math.abs(x - centers[i]);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    cols[bestIdx] = (cols[bestIdx] ? (cols[bestIdx] + ' ' + text) : text).trim();
+  });
+  return cols;
+}
+
+// Lecture d'une page -> renvoie tous les fragments (x,y,text)
+async function extractItemsFromPage(page) {
+  const textContent = await page.getTextContent();
+  // Chaque item possède i.str (texte) et i.transform (matrice). x = transform[4], y = transform[5]
+  return textContent.items
+    .filter(i => i.str && i.str.trim().length > 0)
+    .map(i => {
+      const [a, b, c, d, e, f] = i.transform; // e=x, f=y
+      return { text: i.str.trim(), x: e, y: f };
+    });
+}
+
+// Pipeline principal : PDF -> tableRows
+async function processPDF(file) {
+  const arrayBuf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
+
+  let allItems = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const items = await extractItemsFromPage(page);
+    allItems = allItems.concat(items);
+  }
+
+  // 1) Groupement en lignes
+  const yTol = parseInt(tolInput.value || '3', 10);
+  const rawLines = groupByRows(allItems, yTol).filter(line => line.length > 0);
+
+  // 2) Déterminer la première "vraie" ligne d'entêtes (la plus longue en nb d'items)
+  const headerLine = rawLines.reduce((best, cur) => (cur.length > (best?.length || 0) ? cur : best), null);
+  if (!headerLine || headerLine.length < 2) {
+    throw new Error("Impossible d'inférer les colonnes (pas assez d'éléments sur la ligne d'en-tête). Augmente la tolérance ou essaie un autre PDF tabulaire.");
+  }
+
+  // 3) Centres de colonnes
+  const centers = inferColumnCentersFromHeader(headerLine);
+
+  // 4) Construire tableRows
+  const rows = rawLines.map(line => mapLineToColumns(line, centers));
+
+  // 5) Nettoyage simple : enlever lignes vides et trim
+  const cleaned = rows
+    .map(r => r.map(c => c.replace(/\s+/g, ' ').trim()))
+    .filter(r => r.some(c => c && c.length > 0));
+
+  return cleaned;
+}
+
+// Affiche un aperçu (10 lignes)
+function renderPreview(rows) {
+  const head = rows[0] || [];
+  const htmlHead = '<tr>' + head.map(h => `<th>${h || ''}</th>`).join('') + '</tr>';
+  const htmlBody = rows.slice(1, 11).map(r => '<tr>' + r.map(c => `<td>${c || ''}</td>`).join('') + '</tr>').join('');
+  previewDiv.innerHTML = `<h3>Prévisualisation</h3><div style="overflow:auto;max-height:260px"><table border="1">${htmlHead}${htmlBody}</table></div>`;
+}
+
+// Export en Excel
+function exportToExcel(rows) {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Données PDF");
+  XLSX.utils.book_append_sheet(wb, ws, "Feuille1");
   XLSX.writeFile(wb, "releve_converti.xlsx");
+}
+
+// === Listeners
+pdfFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  previewDiv.innerHTML = "<p>Lecture et reconstruction…</p>";
+  exportBtn.disabled = true;
+
+  try {
+    tableRows = await processPDF(file);
+    renderPreview(tableRows);
+    exportBtn.disabled = false;
+  } catch (err) {
+    previewDiv.innerHTML = `<p style="color:#b00020">Erreur : ${err.message}</p>`;
+    exportBtn.disabled = true;
+  }
 });
 
+exportBtn.addEventListener('click', () => {
+  if (tableRows && tableRows.length) exportToExcel(tableRows);
+});
