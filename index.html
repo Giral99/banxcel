@@ -11,15 +11,25 @@
 </head>
 <body>
   <div class="container">
-    <h1>PDF bancaire → Excel</h1>
-    <p>Dépose ton relevé PDF ci-dessous. Tout est traité dans ton navigateur, rien n’est envoyé.</p>
-    
+    <h1>PDF → Excel (reconstruction table)</h1>
+    <p>Traitement 100% local. Dépose un PDF tabulaire (relevé/tableau).</p>
+
+    <label for="pdfFile">Choisir un PDF</label><br>
     <input type="file" id="pdfFile" accept="application/pdf">
+
+    <div style="margin-top:10px;">
+      <label for="tol">Tolérance verticale (pixels) :</label>
+      <input type="number" id="tol" value="3" min="1" max="12" style="width:60px;">
+    </div>
+
     <button id="exportExcel" disabled>Exporter en Excel</button>
-    
+
+    <div id="hint" style="margin-top:10px;font-size:12px;opacity:.8;">
+      Astuce : si tout part en vrac, augmente la tolérance à 5–8.
+    </div>
+
     <div id="preview"></div>
   </div>
   <script src="app.js"></script>
 </body>
 </html>
-
