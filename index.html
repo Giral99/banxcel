@@ -1,1 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convertisseur PDF bancaire → Excel</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Librairies pdf.js et SheetJS depuis CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>PDF bancaire → Excel</h1>
+    <p>Dépose ton relevé PDF ci-dessous. Tout est traité dans ton navigateur, rien n’est envoyé.</p>
+    
+    <input type="file" id="pdfFile" accept="application/pdf">
+    <button id="exportExcel" disabled>Exporter en Excel</button>
+    
+    <div id="preview"></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
 
